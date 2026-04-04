@@ -6,6 +6,7 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Allow HTTP (non-HTTPS) traffic — remove when you switch to HTTPS -->
     <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="true"
@@ -37,6 +38,20 @@
         <activity
             android:name=".NoConnectionActivity"
             android:exported="false" />
+
+        <!-- Firebase Messaging Service -->
+        <service
+            android:name=".TNMSFirebaseMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!-- Default notification channel metadata -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="tnms_notifications" />
 
     </application>
 </manifest>

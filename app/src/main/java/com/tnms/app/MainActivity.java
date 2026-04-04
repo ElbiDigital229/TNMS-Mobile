@@ -1,15 +1,20 @@
 package com.tnms.app;
 
+import android.Manifest;
 import android.annotation.SuppressLint;
 import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.view.KeyEvent;
 import android.view.View;
 import android.webkit.CookieManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
@@ -21,8 +26,13 @@ import android.widget.ProgressBar;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
+
+import com.google.firebase.messaging.FirebaseMessaging;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -31,6 +41,7 @@ public class MainActivity extends AppCompatActivity {
     private SwipeRefreshLayout swipeRefresh;
     private ValueCallback<Uri[]> fileUploadCallback;
     private final String SERVER_URL = BuildConfig.SERVER_URL;
+    private String pendingDeepLink = null;
 
     private final ActivityResultLauncher<Intent> fileChooserLauncher =
         registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
@@ -57,6 +68,12 @@ public class MainActivity extends AppCompatActivity {
         progressBar = findViewById(R.id.progressBar);
         swipeRefresh = findViewById(R.id.swipeRefresh);
 
+        // Check for deep link from notification
+        handleIntent(getIntent());
+
+        // Request notification permission (Android 13+)
+        requestNotificationPermission();
+
         // ── WebView Settings ──
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
@@ -70,6 +87,9 @@ public class MainActivity extends AppCompatActivity {
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
         settings.setUserAgentString(settings.getUserAgentString() + " TNMSApp/1.0");
+
+        // ── JavaScript Interface for FCM token ──
+        webView.addJavascriptInterface(new WebAppInterface(), "TNMSNative");
 
         // ── Cookies ──
         CookieManager cookieManager = CookieManager.getInstance();
@@ -87,8 +107,19 @@ public class MainActivity extends AppCompatActivity {
             public void onPageFinished(WebView view, String url) {
                 progressBar.setVisibility(View.GONE);
                 swipeRefresh.setRefreshing(false);
-                // Inject CSS to hide browser-specific elements if needed
                 injectMobileCSS(view);
+
+                // After page loads, inject FCM token registration
+                injectFCMTokenRegistration(view);
+
+                // Handle pending deep link
+                if (pendingDeepLink != null) {
+                    String deepLink = pendingDeepLink;
+                    pendingDeepLink = null;
+                    view.evaluateJavascript(
+                        "window.location.href = '" + deepLink + "';", null
+                    );
+                }
             }
 
             @Override
@@ -101,11 +132,9 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 String url = request.getUrl().toString();
-                // Keep internal URLs in WebView, open external in browser
                 if (url.startsWith(SERVER_URL) || url.startsWith("http://localhost")) {
                     return false;
                 }
-                // Open external links in system browser
                 Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
                 startActivity(intent);
                 return true;
@@ -132,7 +161,7 @@ public class MainActivity extends AppCompatActivity {
         });
 
         // ── Pull to refresh ──
-        swipeRefresh.setColorSchemeColors(0xFF2563EB); // primary-600
+        swipeRefresh.setColorSchemeColors(0xFF2563EB);
         swipeRefresh.setOnRefreshListener(() -> webView.reload());
 
         // ── Load app ──
@@ -143,8 +172,80 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        handleIntent(intent);
+        // If WebView is already loaded, navigate to deep link
+        if (pendingDeepLink != null && webView != null) {
+            String deepLink = pendingDeepLink;
+            pendingDeepLink = null;
+            webView.evaluateJavascript(
+                "window.location.href = '" + deepLink + "';", null
+            );
+        }
+    }
+
+    private void handleIntent(Intent intent) {
+        if (intent != null && intent.hasExtra("deep_link")) {
+            pendingDeepLink = intent.getStringExtra("deep_link");
+        }
+    }
+
+    /**
+     * JavaScript interface — allows the web app to get the FCM token
+     */
+    private class WebAppInterface {
+        @JavascriptInterface
+        public String getFCMToken() {
+            SharedPreferences prefs = getSharedPreferences("tnms_prefs", MODE_PRIVATE);
+            return prefs.getString("fcm_token", "");
+        }
+    }
+
+    /**
+     * After page finishes loading, inject JS that registers the FCM token
+     * with the server if the user is logged in.
+     */
+    private void injectFCMTokenRegistration(WebView view) {
+        // First ensure we have the latest FCM token
+        FirebaseMessaging.getInstance().getToken().addOnSuccessListener(token -> {
+            // Store it
+            SharedPreferences prefs = getSharedPreferences("tnms_prefs", MODE_PRIVATE);
+            prefs.edit().putString("fcm_token", token).apply();
+
+            // Inject JS to register token with the server
+            String js = "(function() {" +
+                "try {" +
+                "  var authToken = localStorage.getItem('token');" +
+                "  if (!authToken) return;" +
+                "  var fcmToken = '" + token + "';" +
+                "  fetch('/api/notifications/device-token', {" +
+                "    method: 'POST'," +
+                "    headers: {" +
+                "      'Content-Type': 'application/json'," +
+                "      'Authorization': 'Bearer ' + authToken" +
+                "    }," +
+                "    body: JSON.stringify({ token: fcmToken, platform: 'android' })" +
+                "  });" +
+                "} catch(e) {}" +
+                "})();";
+
+            view.evaluateJavascript(js, null);
+        });
+    }
+
+    private void requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                    != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(this,
+                        new String[]{Manifest.permission.POST_NOTIFICATIONS}, 100);
+            }
+        }
+    }
+
     private void injectMobileCSS(WebView view) {
-        // Make the app feel more native — hide scrollbars, adjust viewport
         String css = "document.body.style.overscrollBehavior='none';" +
                      "document.body.style.webkitUserSelect='none';";
         view.evaluateJavascript(css, null);
@@ -163,7 +264,6 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
-        // Handle back button — go back in WebView history
         if (keyCode == KeyEvent.KEYCODE_BACK && webView.canGoBack()) {
             webView.goBack();
             return true;
