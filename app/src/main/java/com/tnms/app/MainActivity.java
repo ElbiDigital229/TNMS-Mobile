@@ -160,9 +160,12 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        // ── Pull to refresh ──
+        // ── Pull to refresh (only when scrolled to top) ──
         swipeRefresh.setColorSchemeColors(0xFF2563EB);
         swipeRefresh.setOnRefreshListener(() -> webView.reload());
+        webView.setOnScrollChangeListener((v, scrollX, scrollY, oldScrollX, oldScrollY) -> {
+            swipeRefresh.setEnabled(scrollY == 0);
+        });
 
         // ── Load app ──
         if (isNetworkAvailable()) {
