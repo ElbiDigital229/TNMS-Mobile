@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "802017873250",
+    "project_id": "tnms-f9074",
+    "storage_bucket": "tnms-f9074.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:802017873250:android:83d237231611c5f954303b",
+        "android_client_info": {
+          "package_name": "com.tnms.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBZO5tOW-PTPSKGLboN143v3x_GUw_-lPQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
