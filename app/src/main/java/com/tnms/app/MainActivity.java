@@ -106,7 +106,6 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 progressBar.setVisibility(View.GONE);
-                swipeRefresh.setRefreshing(false);
                 injectMobileCSS(view);
 
                 // After page loads, inject FCM token registration
@@ -160,12 +159,8 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        // ── Pull to refresh (only when scrolled to top) ──
-        swipeRefresh.setColorSchemeColors(0xFF2563EB);
-        swipeRefresh.setOnRefreshListener(() -> webView.reload());
-        webView.setOnScrollChangeListener((v, scrollX, scrollY, oldScrollX, oldScrollY) -> {
-            swipeRefresh.setEnabled(scrollY == 0);
-        });
+        // ── Disable pull to refresh (app handles its own scrolling) ──
+        swipeRefresh.setEnabled(false);
 
         // ── Load app ──
         if (isNetworkAvailable()) {
