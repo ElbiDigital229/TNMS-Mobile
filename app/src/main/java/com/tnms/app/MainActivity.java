@@ -2,6 +2,8 @@ package com.tnms.app;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
+import android.content.ActivityNotFoundException;
+import android.content.ClipData;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
@@ -11,6 +13,7 @@ import android.net.NetworkInfo;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.provider.MediaStore;
 import android.view.KeyEvent;
 import android.view.View;
 import android.webkit.CookieManager;
@@ -30,9 +33,16 @@ import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
+import androidx.core.content.FileProvider;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
 import com.google.firebase.messaging.FirebaseMessaging;
+
+import java.io.File;
+import java.io.IOException;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -40,6 +50,10 @@ public class MainActivity extends AppCompatActivity {
     private ProgressBar progressBar;
     private SwipeRefreshLayout swipeRefresh;
     private ValueCallback<Uri[]> fileUploadCallback;
+    /** Chooser params held across a runtime CAMERA permission prompt. */
+    private WebChromeClient.FileChooserParams pendingChooserParams;
+    /** Where the camera app was told to write its capture, if it was offered. */
+    private Uri pendingCameraUri;
     private String serverUrl;
 
     /** Hosts that serve the TNMS app itself — see isAppUrl(). */
@@ -50,20 +64,59 @@ public class MainActivity extends AppCompatActivity {
     };
     private String pendingDeepLink = null;
 
+    private static final int RC_CAMERA = 101;
+
     private final ActivityResultLauncher<Intent> fileChooserLauncher =
         registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
-            if (fileUploadCallback != null) {
-                Uri[] results = null;
-                if (result.getResultCode() == RESULT_OK && result.getData() != null) {
-                    String dataString = result.getData().getDataString();
-                    if (dataString != null) {
-                        results = new Uri[]{Uri.parse(dataString)};
-                    }
-                }
-                fileUploadCallback.onReceiveValue(results);
-                fileUploadCallback = null;
+            Uri cameraUri = pendingCameraUri;
+            pendingCameraUri = null;
+
+            if (fileUploadCallback == null) {
+                return;
             }
+
+            Uri[] results = null;
+            if (result.getResultCode() == RESULT_OK) {
+                results = extractUris(result.getData());
+                // A successful ACTION_IMAGE_CAPTURE returns a null Intent — the
+                // photo is already at the EXTRA_OUTPUT uri we handed it.
+                if (results == null && cameraUri != null) {
+                    results = new Uri[]{ cameraUri };
+                }
+            }
+
+            // The callback MUST be resolved on every path, including cancel.
+            // Leaving it pending wedges the <input type="file"> for the rest of
+            // the session — every later tap opens nothing.
+            fileUploadCallback.onReceiveValue(results);
+            fileUploadCallback = null;
         });
+
+    /**
+     * Pull every selected image out of a chooser result.
+     *
+     * A single pick arrives in getData(). A multi-pick arrives in getClipData()
+     * and leaves getData() null. The previous code read only getDataString(),
+     * so selecting two or more photos handed the WebView a null array: the
+     * picker closed, nothing uploaded, and no error surfaced anywhere. Every
+     * photo input in the web app is `multiple`, so this was the normal path,
+     * not an edge case.
+     */
+    private static Uri[] extractUris(Intent data) {
+        if (data == null) {
+            return null;
+        }
+        ClipData clip = data.getClipData();
+        if (clip != null && clip.getItemCount() > 0) {
+            Uri[] uris = new Uri[clip.getItemCount()];
+            for (int i = 0; i < clip.getItemCount(); i++) {
+                uris[i] = clip.getItemAt(i).getUri();
+            }
+            return uris;
+        }
+        Uri single = data.getData();
+        return single != null ? new Uri[]{ single } : null;
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -162,8 +215,19 @@ public class MainActivity extends AppCompatActivity {
                     fileUploadCallback.onReceiveValue(null);
                 }
                 fileUploadCallback = filePathCallback;
-                Intent intent = fileChooserParams.createIntent();
-                fileChooserLauncher.launch(intent);
+                pendingChooserParams = fileChooserParams;
+
+                // CAMERA is declared in the manifest, which means the OS requires
+                // it to be granted before ACTION_IMAGE_CAPTURE will run. Ask, then
+                // build the chooser from onRequestPermissionsResult.
+                if (ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.CAMERA)
+                        != PackageManager.PERMISSION_GRANTED) {
+                    ActivityCompat.requestPermissions(MainActivity.this,
+                            new String[]{Manifest.permission.CAMERA}, RC_CAMERA);
+                    return true;
+                }
+
+                launchChooser(fileChooserParams, true);
                 return true;
             }
         });
@@ -267,6 +331,103 @@ public class MainActivity extends AppCompatActivity {
             }
         }
         return false;
+    }
+
+    /**
+     * Show the picker technicians actually need: the gallery/document intent
+     * Android hands us, plus a camera capture option beside it.
+     *
+     * fileChooserParams.createIntent() only ever produces a content picker.
+     * Chrome bolts the camera on itself inside its own WebChromeClient, so a
+     * page that offers "take a photo" in the browser offers only "browse
+     * files" once it is wrapped in this app — which is why a technician
+     * standing in front of the equipment had no way to photograph it.
+     */
+    private void launchChooser(WebChromeClient.FileChooserParams params, boolean withCamera) {
+        pendingChooserParams = null;
+
+        Intent contentIntent = params.createIntent();
+        Intent chooser = Intent.createChooser(contentIntent, getString(R.string.file_chooser_title));
+
+        if (withCamera) {
+            Intent cameraIntent = buildCameraIntent();
+            if (cameraIntent != null) {
+                chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, new Intent[]{ cameraIntent });
+            }
+        }
+
+        try {
+            fileChooserLauncher.launch(chooser);
+        } catch (ActivityNotFoundException e) {
+            pendingCameraUri = null;
+            if (fileUploadCallback != null) {
+                fileUploadCallback.onReceiveValue(null);
+                fileUploadCallback = null;
+            }
+        }
+    }
+
+    /**
+     * Camera intent writing to a FileProvider uri, or null if the device has
+     * no camera app or the temp file can't be created — in which case the
+     * chooser is still shown, just without the camera entry.
+     */
+    private Intent buildCameraIntent() {
+        Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+        if (intent.resolveActivity(getPackageManager()) == null) {
+            return null;
+        }
+
+        File photo;
+        try {
+            photo = createCaptureFile();
+        } catch (IOException e) {
+            return null;
+        }
+
+        pendingCameraUri = FileProvider.getUriForFile(
+                this, getPackageName() + ".fileprovider", photo);
+        intent.putExtra(MediaStore.EXTRA_OUTPUT, pendingCameraUri);
+        intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        return intent;
+    }
+
+    /**
+     * Captures land in cache/, not external storage, which keeps the app clear
+     * of READ_EXTERNAL_STORAGE and the Android 13 media permissions entirely
+     * and lets the OS reclaim the files.
+     *
+     * The .jpg suffix is load-bearing: the server validates uploads on the
+     * file extension (server/middleware/upload.ts), so an extensionless name
+     * is rejected.
+     */
+    private File createCaptureFile() throws IOException {
+        File dir = new File(getCacheDir(), "camera");
+        if (!dir.exists() && !dir.mkdirs()) {
+            throw new IOException("Could not create " + dir);
+        }
+        String stamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date());
+        return File.createTempFile("TNMS_" + stamp + "_", ".jpg", dir);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
+                                           @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != RC_CAMERA) {
+            return;
+        }
+
+        WebChromeClient.FileChooserParams params = pendingChooserParams;
+        if (params == null) {
+            return;
+        }
+
+        // Denying the camera should not cost them the gallery — show the
+        // chooser either way, just without the camera entry.
+        boolean granted = grantResults.length > 0
+                && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+        launchChooser(params, granted);
     }
 
     private void requestNotificationPermission() {
