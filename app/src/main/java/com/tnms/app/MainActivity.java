@@ -40,7 +40,14 @@ public class MainActivity extends AppCompatActivity {
     private ProgressBar progressBar;
     private SwipeRefreshLayout swipeRefresh;
     private ValueCallback<Uri[]> fileUploadCallback;
-    private final String SERVER_URL = BuildConfig.SERVER_URL;
+    private String serverUrl;
+
+    /** Hosts that serve the TNMS app itself — see isAppUrl(). */
+    private static final String[] APP_HOSTS = {
+            "feoms.vercel.app",
+            "ticket.truenorthpk.com",
+            "localhost",
+    };
     private String pendingDeepLink = null;
 
     private final ActivityResultLauncher<Intent> fileChooserLauncher =
@@ -67,6 +74,8 @@ public class MainActivity extends AppCompatActivity {
         webView = findViewById(R.id.webView);
         progressBar = findViewById(R.id.progressBar);
         swipeRefresh = findViewById(R.id.swipeRefresh);
+
+        serverUrl = ServerConfig.getServerUrl(this);
 
         // Check for deep link from notification
         handleIntent(getIntent());
@@ -130,11 +139,11 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                String url = request.getUrl().toString();
-                if (url.startsWith(SERVER_URL) || url.startsWith("http://localhost")) {
+                Uri url = request.getUrl();
+                if (isAppUrl(url)) {
                     return false;
                 }
-                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                Intent intent = new Intent(Intent.ACTION_VIEW, url);
                 startActivity(intent);
                 return true;
             }
@@ -164,7 +173,7 @@ public class MainActivity extends AppCompatActivity {
 
         // ── Load app ──
         if (isNetworkAvailable()) {
-            webView.loadUrl(SERVER_URL);
+            webView.loadUrl(serverUrl);
         } else {
             showNoConnection();
         }
@@ -231,6 +240,33 @@ public class MainActivity extends AppCompatActivity {
 
             view.evaluateJavascript(js, null);
         });
+    }
+
+    /**
+     * Is this URL part of the TNMS app, or should it open in a browser?
+     *
+     * The configured server URL's host is always ours. The extra hosts cover
+     * the redirect chain: feoms.vercel.app answers every path with a 301 to
+     * ticket.truenorthpk.com, so the host the WebView actually lands on is
+     * not the host we asked for. Matching on a string prefix (the old check)
+     * treated that redirect as an external link and kicked the user out to
+     * Chrome on the very first page load.
+     */
+    private boolean isAppUrl(Uri url) {
+        String host = url.getHost();
+        if (host == null) {
+            return false;
+        }
+        String configuredHost = Uri.parse(serverUrl).getHost();
+        if (configuredHost != null && host.equalsIgnoreCase(configuredHost)) {
+            return true;
+        }
+        for (String appHost : APP_HOSTS) {
+            if (host.equalsIgnoreCase(appHost)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void requestNotificationPermission() {
