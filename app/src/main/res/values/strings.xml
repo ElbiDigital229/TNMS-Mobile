@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">TNMS</string>
+    <string name="file_chooser_title">Add photo</string>
 </resources>

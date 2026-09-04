@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Camera captures written by buildCameraIntent(). Kept in cache/ so the
+         app needs no storage permissions and the OS can reclaim the files. -->
+    <cache-path name="camera" path="camera/" />
+</paths>

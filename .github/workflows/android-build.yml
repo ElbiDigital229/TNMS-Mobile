@@ -1,0 +1,37 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main, "fix/**", "feat/**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # AGP 8.2 requires JDK 17.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # The repo tracks gradlew and gradle-wrapper.properties but NOT
+      # gradle-wrapper.jar, so ./gradlew cannot run on a fresh clone. Install
+      # Gradle 8.2 directly (the version gradle-wrapper.properties pins) and
+      # invoke it rather than the wrapper.
+      - uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: "8.2"
+
+      - name: Assemble debug APK
+        run: gradle assembleDebug --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tnms-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
