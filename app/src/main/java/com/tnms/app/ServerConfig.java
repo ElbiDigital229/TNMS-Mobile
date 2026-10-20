@@ -27,6 +27,10 @@ public final class ServerConfig {
             "http://18.234.126.30",
             "http://18.234.126.30/",
             "http://18.234.126.30:5000",
+            // 1.1.0 default. The Vercel deployment behind it was deleted
+            // (Oct 2026) and now answers 404 DEPLOYMENT_NOT_FOUND.
+            "https://feoms.vercel.app",
+            "https://feoms.vercel.app/",
     };
 
     private ServerConfig() {}
